@@ -95,27 +95,11 @@ jobs:
       - name: Checkout caller repository
         uses: actions/checkout@v4
 
-      - name: Resolve CI/CD workflow source
-        id: cicd_source
-        shell: bash
-        run: |
-          workflow_ref='${{ github.workflow_ref }}'
-          cicd_repo="${workflow_ref%%/.github/workflows/*}"
-          cicd_ref="${workflow_ref##*@}"
-
-          if [[ -z "$cicd_repo" || -z "$cicd_ref" ]]; then
-            echo "Failed to resolve CI/CD workflow source from github.workflow_ref=$workflow_ref" >&2
-            exit 1
-          fi
-
-          echo "cicd_repo=${cicd_repo}" >> "$GITHUB_OUTPUT"
-          echo "cicd_ref=${cicd_ref}" >> "$GITHUB_OUTPUT"
-
       - name: Checkout CI/CD system repository
         uses: actions/checkout@v4
         with:
-          repository: ${{ steps.cicd_source.outputs.cicd_repo }}
-          ref: ${{ steps.cicd_source.outputs.cicd_ref }}
+          repository: acesarhernandez/CI-CD-Git-Workflow
+          ref: main
           path: .cicd-system
 
       - name: Set up Python
