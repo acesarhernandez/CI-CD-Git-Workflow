@@ -666,25 +666,27 @@
       }
     },
     {
-      "if": {
-        "properties": {
-          "environments": {
-            "properties": {
-              "production": {
-                "properties": {
-                  "source_deploy": {
-                    "properties": {
-                      "enabled": { "const": true }
-                    },
-                    "required": ["enabled"]
-                  }
-                }
+"if": {
+  "properties": {
+    "environments": {
+      "required": ["production"],
+      "properties": {
+        "production": {
+          "required": ["source_deploy"],
+          "properties": {
+            "source_deploy": {
+              "required": ["enabled"],
+              "properties": {
+                "enabled": { "const": true }
               }
             }
           }
         }
-      },
-      "then": false
+      }
+    }
+  }
+},
+"then": false
     }
   ]
 }
