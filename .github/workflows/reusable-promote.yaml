@@ -1,0 +1,169 @@
+name: Reusable Promote
+
+on:
+  workflow_call:
+    inputs:
+      release_manifest_artifact_name:
+        description: Name of the uploaded release manifest artifact
+        required: true
+        type: string
+
+      source_environment:
+        description: Source environment for promotion
+        required: true
+        type: string
+
+      target_environment:
+        description: Target environment to promote to
+        required: true
+        type: string
+
+      config_path:
+        description: Path to the app CI/CD config file
+        required: false
+        type: string
+        default: cicd.app.yaml
+
+    outputs:
+      promoted_release_id:
+        description: Release ID that was promoted
+        value: ${{ jobs.precheck.outputs.promoted_release_id }}
+
+      promoted_release_version:
+        description: Release version that was promoted
+        value: ${{ jobs.precheck.outputs.promoted_release_version }}
+
+      verification_passed:
+        description: Whether verification passed in target environment
+        value: ${{ jobs.verify_target.outputs.verification_passed }}
+
+jobs:
+  precheck:
+    name: Promotion Precheck
+    runs-on: ubuntu-latest
+
+    outputs:
+      promoted_release_id: ${{ steps.manifest_meta.outputs.release_id }}
+      promoted_release_version: ${{ steps.manifest_meta.outputs.release_version }}
+
+    steps:
+      - name: Validate promotion path
+        shell: bash
+        run: |
+          source_env="${{ inputs.source_environment }}"
+          target_env="${{ inputs.target_environment }}"
+
+          if [[ "$source_env" == "$target_env" ]]; then
+            echo "Source and target environments must differ." >&2
+            exit 1
+          fi
+
+          if [[ "$source_env" == "development" && "$target_env" == "staging" ]]; then
+            echo "Valid promotion path: development -> staging"
+          elif [[ "$source_env" == "staging" && "$target_env" == "production" ]]; then
+            echo "Valid promotion path: staging -> production"
+          else
+            echo "Invalid promotion path: ${source_env} -> ${target_env}" >&2
+            exit 1
+          fi
+
+      - name: Download release manifest artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.release_manifest_artifact_name }}
+          path: promotion-manifest
+
+      - name: Read manifest metadata
+        id: manifest_meta
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          manifest_dir = Path("promotion-manifest")
+          manifest_files = list(manifest_dir.glob("*.json"))
+
+          if len(manifest_files) != 1:
+              print(
+                  f"Expected exactly one manifest JSON file in {manifest_dir}, found {len(manifest_files)}.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          manifest_path = manifest_files[0]
+
+          try:
+              with manifest_path.open("r", encoding="utf-8") as f:
+                  manifest = json.load(f)
+          except json.JSONDecodeError as exc:
+              print(f"Failed to parse manifest JSON '{manifest_path}': {exc}", file=sys.stderr)
+              sys.exit(1)
+          except OSError as exc:
+              print(f"Failed to read manifest '{manifest_path}': {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          try:
+              release_id = manifest["release"]["id"]
+              release_version = manifest["release"]["version"]
+              supported_environments = manifest["compatibility"]["supported_environments"]
+          except KeyError as exc:
+              print(f"Manifest missing required key: {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          target_environment = "${{ inputs.target_environment }}"
+          if target_environment not in supported_environments:
+              print(
+                  f"Target environment '{target_environment}' is not supported by this release manifest.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          output_path = os.environ["GITHUB_OUTPUT"]
+          with open(output_path, "a", encoding="utf-8") as out:
+              out.write(f"release_id={release_id}\n")
+              out.write(f"release_version={release_version}\n")
+          PY
+
+  deploy_target:
+    name: Deploy Promoted Target
+    needs: precheck
+    uses: ./.github/workflows/reusable-deploy.yaml
+    with:
+      release_manifest_artifact_name: ${{ inputs.release_manifest_artifact_name }}
+      target_environment: ${{ inputs.target_environment }}
+      config_path: ${{ inputs.config_path }}
+
+  verify_target:
+    name: Verify Promoted Target
+    needs:
+      - precheck
+      - deploy_target
+    uses: ./.github/workflows/reusable-verify.yaml
+    with:
+      release_manifest_artifact_name: ${{ inputs.release_manifest_artifact_name }}
+      target_environment: ${{ inputs.target_environment }}
+
+  promotion_summary:
+    name: Promotion Summary
+    runs-on: ubuntu-latest
+    needs:
+      - precheck
+      - deploy_target
+      - verify_target
+
+    steps:
+      - name: Promotion summary
+        shell: bash
+        run: |
+          {
+            echo "## Promotion Summary"
+            echo ""
+            echo "- Release ID: ${{ needs.precheck.outputs.promoted_release_id }}"
+            echo "- Release Version: ${{ needs.precheck.outputs.promoted_release_version }}"
+            echo "- Source Environment: ${{ inputs.source_environment }}"
+            echo "- Target Environment: ${{ inputs.target_environment }}"
+            echo "- Verification Passed: ${{ needs.verify_target.outputs.verification_passed }}"
+          } >> "$GITHUB_STEP_SUMMARY"

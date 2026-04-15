@@ -1,0 +1,690 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "cicd.app schema",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "app",
+    "profile",
+    "deploy_modes",
+    "build",
+    "deploy",
+    "verify",
+    "environments"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1"]
+    },
+
+    "kind": {
+      "type": "string",
+      "enum": ["cicd.app"]
+    },
+
+    "app": {
+      "type": "object",
+      "required": ["name", "repository", "service"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$"
+        },
+        "service": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["api", "worker", "frontend", "cron", "gateway", "none"]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "profile": {
+      "type": "object",
+      "required": ["id", "deployment_unit", "runtime_family"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "enum": ["container-single", "compose-multi", "static-frontend"]
+        },
+        "deployment_unit": {
+          "type": "string",
+          "enum": ["image", "artifact"]
+        },
+        "runtime_family": {
+          "type": "string",
+          "enum": ["docker", "static", "binary"]
+        },
+        "default_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "deploy_modes": {
+      "type": "object",
+      "required": ["primary", "allow_source_deploy"],
+      "properties": {
+        "primary": {
+          "type": "string",
+          "enum": ["image", "artifact"]
+        },
+        "allow_source_deploy": {
+          "type": "boolean"
+        },
+        "source_deploy": {
+          "type": "object",
+          "required": ["enabled", "allowed_environments", "allowed_branches"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "allowed_environments": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["development", "staging", "preview"]
+              }
+            },
+            "allowed_branches": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "build": {
+      "type": "object",
+      "required": ["context"],
+      "properties": {
+        "context": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dockerfile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "type": ["string", "null"]
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "image": {
+          "type": "object",
+          "required": ["registry", "repository"],
+          "properties": {
+            "registry": {
+              "type": "string",
+              "minLength": 1
+            },
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag_template": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "artifact": {
+          "type": "object",
+          "required": ["path", "type"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "type": "string",
+              "enum": ["tar.gz", "zip", "directory"]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "deploy": {
+      "type": "object",
+      "required": ["strategy", "target"],
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["docker-compose", "docker-run", "static-sync", "systemd"]
+        },
+        "target": {
+          "type": "object",
+          "required": ["type", "name"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "compose": {
+          "type": "object",
+          "required": ["file"],
+          "properties": {
+            "file": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "docker": {
+          "type": "object",
+          "required": ["container_name"],
+          "properties": {
+            "container_name": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "artifact": {
+          "type": "object",
+          "required": ["extract_to"],
+          "properties": {
+            "extract_to": {
+              "type": "string",
+              "minLength": 1
+            },
+            "startup_command": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "verify": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "url", "method", "expect"],
+          "properties": {
+            "type": { "const": "http" },
+            "name": { "type": "string", "minLength": 1 },
+            "url": { "type": "string", "format": "uri" },
+            "method": {
+              "type": "string",
+              "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+            },
+            "expect": {
+              "type": "object",
+              "required": ["status_codes"],
+              "properties": {
+                "status_codes": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 599
+                  }
+                },
+                "body_contains": { "type": "string" }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["type", "target", "expect"],
+          "properties": {
+            "type": { "const": "process" },
+            "name": { "type": "string", "minLength": 1 },
+            "target": {
+              "type": "object",
+              "required": ["kind", "name"],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": ["docker-container", "systemd-service", "pid-file"]
+                },
+                "name": { "type": "string", "minLength": 1 }
+              },
+              "additionalProperties": false
+            },
+            "expect": {
+              "type": "object",
+              "required": ["state"],
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "enum": ["running", "healthy", "active"]
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["type", "command", "expect"],
+          "properties": {
+            "type": { "const": "command" },
+            "name": { "type": "string", "minLength": 1 },
+            "command": { "type": "string", "minLength": 1 },
+            "shell": { "type": "string", "minLength": 1 },
+            "expect": {
+              "type": "object",
+              "required": ["exit_code"],
+              "properties": {
+                "exit_code": { "type": "integer" }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["type", "path", "expect"],
+          "properties": {
+            "type": { "const": "asset" },
+            "name": { "type": "string", "minLength": 1 },
+            "path": { "type": "string", "minLength": 1 },
+            "expect": {
+              "type": "object",
+              "required": ["exists"],
+              "properties": {
+                "exists": { "type": "boolean" }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": ["type", "checks"],
+          "properties": {
+            "type": { "const": "composite" },
+            "name": { "type": "string", "minLength": 1 },
+            "checks": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": ["http", "process", "command", "asset"]
+                  }
+                },
+                "additionalProperties": true
+              }
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+
+    "environments": {
+      "type": "object",
+      "required": ["development", "staging", "production"],
+      "properties": {
+        "development": { "$ref": "#/definitions/environmentConfig" },
+        "staging": { "$ref": "#/definitions/environmentConfig" },
+        "production": { "$ref": "#/definitions/environmentConfig" }
+      },
+      "additionalProperties": false
+    },
+
+    "lifecycle": {
+      "type": "object",
+      "properties": {
+        "pre_deploy": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/lifecycleStep" }
+        },
+        "post_deploy": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/lifecycleStep" }
+        },
+        "pre_verify": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/lifecycleStep" }
+        },
+        "post_verify": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/lifecycleStep" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "metadata": {
+      "type": "object"
+    }
+  },
+
+  "additionalProperties": false,
+
+  "definitions": {
+    "environmentConfig": {
+      "type": "object",
+      "required": ["deploy"],
+      "properties": {
+        "approval_required": { "type": "boolean" },
+        "deploy": {
+          "type": "object",
+          "required": ["target"],
+          "properties": {
+            "target": {
+              "type": "object",
+              "required": ["name"],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        },
+        "verify": {
+          "type": "object"
+        },
+        "source_deploy": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "lifecycleStep": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": ["command", "script_path", "make_target", "npm_script"]
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "script_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "make_target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "npm_script": {
+          "type": "string",
+          "minLength": 1
+        },
+        "allowed_environments": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["development", "staging", "production", "preview"]
+          }
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": { "type": { "const": "command" } },
+          "required": ["command"]
+        },
+        {
+          "properties": { "type": { "const": "script_path" } },
+          "required": ["script_path"]
+        },
+        {
+          "properties": { "type": { "const": "make_target" } },
+          "required": ["make_target"]
+        },
+        {
+          "properties": { "type": { "const": "npm_script" } },
+          "required": ["npm_script"]
+        }
+      ]
+    }
+  },
+
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "properties": {
+              "deployment_unit": { "const": "image" }
+            },
+            "required": ["deployment_unit"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "build": {
+            "required": ["dockerfile", "image"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "properties": {
+              "deployment_unit": { "const": "artifact" }
+            },
+            "required": ["deployment_unit"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "build": {
+            "required": ["artifact"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "deploy": {
+            "properties": {
+              "strategy": { "const": "docker-compose" }
+            },
+            "required": ["strategy"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "deploy": {
+            "required": ["compose"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "deploy": {
+            "properties": {
+              "strategy": { "const": "docker-run" }
+            },
+            "required": ["strategy"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "deploy": {
+            "required": ["docker"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "properties": {
+              "id": {
+                "enum": ["container-single", "compose-multi"]
+              }
+            },
+            "required": ["id"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "app": {
+            "required": ["role"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "deploy_modes": {
+            "properties": {
+              "allow_source_deploy": { "const": true }
+            },
+            "required": ["allow_source_deploy"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "deploy_modes": {
+            "required": ["source_deploy"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "deploy_modes": {
+            "properties": {
+              "source_deploy": {
+                "properties": {
+                  "enabled": { "const": true }
+                },
+                "required": ["enabled"]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "deploy_modes": {
+            "properties": {
+              "source_deploy": {
+                "required": ["allowed_environments", "allowed_branches"]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "environments": {
+            "properties": {
+              "production": {
+                "properties": {
+                  "source_deploy": {
+                    "properties": {
+                      "enabled": { "const": true }
+                    },
+                    "required": ["enabled"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": false
+    }
+  ]
+}

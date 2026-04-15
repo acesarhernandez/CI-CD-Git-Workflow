@@ -1,0 +1,155 @@
+name: Reusable Validate
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        description: Path to the app CI/CD config file
+        required: false
+        type: string
+        default: cicd.app.yaml
+
+      schema_path:
+        description: Path to the CI/CD app schema file
+        required: false
+        type: string
+        default: cicd.app.schema.json
+
+      target_environment:
+        description: Target environment for validation
+        required: true
+        type: string
+
+    outputs:
+      config_path:
+        description: Resolved config path
+        value: ${{ jobs.validate_config.outputs.config_path }}
+
+      config_exists:
+        description: Whether the config file exists
+        value: ${{ jobs.validate_config.outputs.config_exists }}
+
+      validation_passed:
+        description: Whether schema validation passed
+        value: ${{ jobs.validate_config.outputs.validation_passed }}
+
+      validation_error_count:
+        description: Number of schema validation errors
+        value: ${{ jobs.validate_config.outputs.validation_error_count }}
+
+      validation_errors_json:
+        description: Schema validation errors as JSON
+        value: ${{ jobs.validate_config.outputs.validation_errors_json }}
+
+      policy_validation_passed:
+        description: Whether policy validation passed
+        value: ${{ jobs.validate_config.outputs.policy_validation_passed }}
+
+      policy_error_count:
+        description: Number of policy validation errors
+        value: ${{ jobs.validate_config.outputs.policy_error_count }}
+
+      policy_errors_json:
+        description: Policy validation errors as JSON
+        value: ${{ jobs.validate_config.outputs.policy_errors_json }}
+
+jobs:
+  validate_config:
+    runs-on: ubuntu-latest
+
+    outputs:
+      config_path: ${{ steps.load.outputs.config_path }}
+      config_exists: ${{ steps.load.outputs.config_exists }}
+      validation_passed: ${{ steps.schema.outputs.validation_passed }}
+      validation_error_count: ${{ steps.schema.outputs.validation_error_count }}
+      validation_errors_json: ${{ steps.schema.outputs.validation_errors_json }}
+      policy_validation_passed: ${{ steps.policy.outputs.policy_validation_passed }}
+      policy_error_count: ${{ steps.policy.outputs.policy_error_count }}
+      policy_errors_json: ${{ steps.policy.outputs.policy_errors_json }}
+
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Resolve CI/CD workflow source
+        id: cicd_source
+        shell: bash
+        run: |
+          workflow_ref='${{ github.workflow_ref }}'
+          cicd_repo="${workflow_ref%%/.github/workflows/*}"
+          cicd_ref="${workflow_ref##*@}"
+
+          if [[ -z "$cicd_repo" || -z "$cicd_ref" ]]; then
+            echo "Failed to resolve CI/CD workflow source from github.workflow_ref=$workflow_ref" >&2
+            exit 1
+          fi
+
+          echo "cicd_repo=${cicd_repo}" >> "$GITHUB_OUTPUT"
+          echo "cicd_ref=${cicd_ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout CI/CD system repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.cicd_source.outputs.cicd_repo }}
+          ref: ${{ steps.cicd_source.outputs.cicd_ref }}
+          path: .cicd-system
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install validation dependencies
+        shell: bash
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyyaml jsonschema
+
+      - name: Load app config
+        id: load
+        shell: bash
+        run: |
+          python3 '.cicd-system/load_config.py' '${{ inputs.config_path }}'
+
+      - name: Validate config against schema
+        id: schema
+        shell: bash
+        run: |
+          schema_path_input='${{ inputs.schema_path }}'
+          schema_path="$schema_path_input"
+
+          if [[ ! -f "$schema_path" ]]; then
+            schema_path=".cicd-system/${schema_path_input}"
+          fi
+
+          if [[ ! -f "$schema_path" ]]; then
+            echo "Schema file not found. Checked: '$schema_path_input' and '.cicd-system/${schema_path_input}'" >&2
+            exit 1
+          fi
+
+          python3 '.cicd-system/validate_config.py' \
+            '${{ steps.load.outputs.config_path }}' \
+            "$schema_path"
+
+      - name: Run policy validation
+        id: policy
+        shell: bash
+        run: |
+          python3 '.cicd-system/policy_validate.py' \
+            '${{ steps.load.outputs.config_path }}' \
+            '${{ inputs.target_environment }}'
+
+      - name: Validation summary
+        shell: bash
+        run: |
+          {
+            echo "## Validation Summary"
+            echo ""
+            echo "- Environment: ${{ inputs.target_environment }}"
+            echo "- Config path: ${{ steps.load.outputs.config_path }}"
+            echo "- Config exists: ${{ steps.load.outputs.config_exists }}"
+            echo "- Schema validation passed: ${{ steps.schema.outputs.validation_passed }}"
+            echo "- Schema validation error count: ${{ steps.schema.outputs.validation_error_count }}"
+            echo "- Policy validation passed: ${{ steps.policy.outputs.policy_validation_passed }}"
+            echo "- Policy validation error count: ${{ steps.policy.outputs.policy_error_count }}"
+          } >> "$GITHUB_STEP_SUMMARY"

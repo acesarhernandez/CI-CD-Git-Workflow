@@ -1,0 +1,414 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "release_manifest schema",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "manifest_version",
+    "release",
+    "app",
+    "deployment_unit",
+    "build",
+    "verification_contract",
+    "compatibility",
+    "recovery",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1"]
+    },
+
+    "kind": {
+      "type": "string",
+      "enum": ["release_manifest"]
+    },
+
+    "manifest_version": {
+      "type": "integer",
+      "enum": [1]
+    },
+
+    "release": {
+      "type": "object",
+      "required": ["id", "version", "created_at", "source_ref", "git"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "channel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "git": {
+          "type": "object",
+          "required": ["commit_sha", "short_sha"],
+          "properties": {
+            "commit_sha": {
+              "type": "string",
+              "minLength": 1
+            },
+            "short_sha": {
+              "type": "string",
+              "minLength": 1
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": ["string", "null"]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "app": {
+      "type": "object",
+      "required": ["name", "service", "profile"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "service": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile": {
+          "type": "string",
+          "enum": ["container-single", "compose-multi", "static-frontend"]
+        },
+        "role": {
+          "type": "string",
+          "enum": ["api", "worker", "frontend", "cron", "gateway", "none"]
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "deployment_unit": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["image", "artifact"]
+        },
+        "image": {
+          "type": "object",
+          "required": ["registry", "repository", "digest"],
+          "properties": {
+            "registry": {
+              "type": "string",
+              "minLength": 1
+            },
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": "string",
+              "minLength": 1
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-fA-F0-9]{64}$"
+            },
+            "platform": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "artifact": {
+          "type": "object",
+          "required": ["path_or_ref", "type", "checksum"],
+          "properties": {
+            "path_or_ref": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "type": "string",
+              "enum": ["tar.gz", "zip", "directory"]
+            },
+            "checksum": {
+              "type": "string",
+              "pattern": "^sha256:[a-fA-F0-9]{64}$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "build": {
+      "type": "object",
+      "required": [
+        "runner_type",
+        "workflow_ref",
+        "workflow_run_id",
+        "started_at",
+        "finished_at",
+        "source_config_hash"
+      ],
+      "properties": {
+        "runner_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflow_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflow_run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflow_run_attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_config_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_inputs_hash": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "verification_contract": {
+      "type": "object",
+      "required": ["source", "definition"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["embedded", "external_ref"]
+        },
+        "ref": {
+          "type": ["string", "null"]
+        },
+        "definition": {
+          "type": "object",
+          "minProperties": 1
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "compatibility": {
+      "type": "object",
+      "required": ["supported_environments", "deploy_mode"],
+      "properties": {
+        "supported_environments": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["development", "staging", "production", "preview"]
+          }
+        },
+        "deploy_mode": {
+          "type": "string",
+          "enum": ["image", "artifact"]
+        },
+        "source_deploy_eligible": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "recovery": {
+      "type": "object",
+      "required": ["recovery_strategy", "retained"],
+      "properties": {
+        "recovery_strategy": {
+          "type": "string",
+          "enum": ["manifest-redeploy", "commit-rebuild"]
+        },
+        "retained": {
+          "type": "boolean"
+        },
+        "previous_release_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rollback_commit_sha": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "integrity": {
+      "type": "object",
+      "required": ["manifest_sha256", "deployment_unit_digest_verified"],
+      "properties": {
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[a-fA-F0-9]{64}$"
+        },
+        "deployment_unit_digest_verified": {
+          "type": "boolean"
+        },
+        "signed": {
+          "type": "boolean"
+        },
+        "signature_ref": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "metadata": {
+      "type": "object"
+    }
+  },
+
+  "additionalProperties": false,
+
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "deployment_unit": {
+            "properties": {
+              "type": { "const": "image" }
+            },
+            "required": ["type"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "deployment_unit": {
+            "required": ["image"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "deployment_unit": {
+            "properties": {
+              "type": { "const": "artifact" }
+            },
+            "required": ["type"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "deployment_unit": {
+            "required": ["artifact"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "compatibility": {
+            "properties": {
+              "deploy_mode": { "const": "image" }
+            },
+            "required": ["deploy_mode"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "deployment_unit": {
+            "properties": {
+              "type": { "const": "image" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "compatibility": {
+            "properties": {
+              "deploy_mode": { "const": "artifact" }
+            },
+            "required": ["deploy_mode"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "deployment_unit": {
+            "properties": {
+              "type": { "const": "artifact" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "compatibility": {
+            "properties": {
+              "source_deploy_eligible": { "const": true }
+            },
+            "required": ["source_deploy_eligible"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "compatibility": {
+            "properties": {
+              "supported_environments": {
+                "not": {
+                  "contains": { "const": "production" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

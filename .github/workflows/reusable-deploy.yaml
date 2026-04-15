@@ -1,0 +1,264 @@
+name: Reusable Deploy
+
+on:
+  workflow_call:
+    inputs:
+      release_manifest_artifact_name:
+        description: Name of the uploaded release manifest artifact
+        required: false
+        type: string
+        default: ""
+
+      release_manifest_path:
+        description: Path to the release manifest JSON file
+        required: false
+        type: string
+        default: ""
+
+      target_environment:
+        description: Target environment to deploy to
+        required: true
+        type: string
+
+      config_path:
+        description: Path to the app CI/CD config file
+        required: false
+        type: string
+        default: cicd.app.yaml
+
+    outputs:
+      deployed_release_id:
+        description: Release ID that was deployed
+        value: ${{ jobs.deploy.outputs.deployed_release_id }}
+
+      deployed_release_version:
+        description: Release version that was deployed
+        value: ${{ jobs.deploy.outputs.deployed_release_version }}
+
+      deployed_image_digest:
+        description: Image digest that was deployed
+        value: ${{ jobs.deploy.outputs.deployed_image_digest }}
+
+      deploy_target_name:
+        description: Deploy target name from environment config
+        value: ${{ jobs.deploy.outputs.deploy_target_name }}
+
+      resolved_manifest_path:
+        description: Resolved manifest path used for deployment
+        value: ${{ jobs.deploy.outputs.resolved_manifest_path }}
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: self-hosted
+    environment: ${{ inputs.target_environment }}
+
+    outputs:
+      deployed_release_id: ${{ steps.deploy_meta.outputs.release_id }}
+      deployed_release_version: ${{ steps.deploy_meta.outputs.release_version }}
+      deployed_image_digest: ${{ steps.deploy_meta.outputs.image_digest }}
+      deploy_target_name: ${{ steps.deploy_config.outputs.deploy_target_name }}
+      resolved_manifest_path: ${{ steps.resolve_manifest.outputs.manifest_path }}
+
+    steps:
+      - name: Validate manifest input mode
+        shell: bash
+        run: |
+          artifact_name="${{ inputs.release_manifest_artifact_name }}"
+          manifest_path="${{ inputs.release_manifest_path }}"
+
+          if [[ -n "$artifact_name" && -n "$manifest_path" ]]; then
+            echo "Provide either release_manifest_artifact_name or release_manifest_path, not both." >&2
+            exit 1
+          fi
+
+          if [[ -z "$artifact_name" && -z "$manifest_path" ]]; then
+            echo "You must provide release_manifest_artifact_name or release_manifest_path." >&2
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download release manifest artifact
+        if: ${{ inputs.release_manifest_artifact_name != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.release_manifest_artifact_name }}
+          path: deploy-manifest
+
+      - name: Resolve manifest path
+        id: resolve_manifest
+        shell: bash
+        run: |
+          if [[ -n "${{ inputs.release_manifest_artifact_name }}" ]]; then
+            manifest_file=$(find deploy-manifest -maxdepth 1 -name '*.json' | head -n 1)
+            if [[ -z "$manifest_file" ]]; then
+              echo "No manifest JSON file found in downloaded artifact." >&2
+              exit 1
+            fi
+            echo "manifest_path=$manifest_file" >> "$GITHUB_OUTPUT"
+          else
+            manifest_path="${{ inputs.release_manifest_path }}"
+            if [[ ! -f "$manifest_path" ]]; then
+              echo "Manifest path does not exist: $manifest_path" >&2
+              exit 1
+            fi
+            echo "manifest_path=$manifest_path" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install YAML dependency
+        shell: bash
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyyaml
+
+      - name: Read release manifest
+        id: deploy_meta
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          manifest_path = Path("${{ steps.resolve_manifest.outputs.manifest_path }}").resolve()
+
+          try:
+              with manifest_path.open("r", encoding="utf-8") as f:
+                  manifest = json.load(f)
+          except json.JSONDecodeError as exc:
+              print(f"Failed to parse manifest JSON '{manifest_path}': {exc}", file=sys.stderr)
+              sys.exit(1)
+          except OSError as exc:
+              print(f"Failed to read manifest '{manifest_path}': {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          try:
+              release_id = manifest["release"]["id"]
+              release_version = manifest["release"]["version"]
+              image_digest = manifest["deployment_unit"]["image"]["digest"]
+              image_registry = manifest["deployment_unit"]["image"]["registry"]
+              image_repository = manifest["deployment_unit"]["image"]["repository"]
+              supported_environments = manifest["compatibility"]["supported_environments"]
+          except KeyError as exc:
+              print(f"Manifest missing required key: {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          target_environment = "${{ inputs.target_environment }}"
+          if target_environment not in supported_environments:
+              print(
+                  f"Target environment '{target_environment}' is not supported by this release manifest.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          output_path = os.environ["GITHUB_OUTPUT"]
+          with open(output_path, "a", encoding="utf-8") as out:
+              out.write(f"release_id={release_id}\n")
+              out.write(f"release_version={release_version}\n")
+              out.write(f"image_digest={image_digest}\n")
+              out.write(f"image_registry={image_registry}\n")
+              out.write(f"image_repository={image_repository}\n")
+          PY
+
+      - name: Read deploy config
+        id: deploy_config
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          import yaml
+          from pathlib import Path
+
+          config_path = Path("${{ inputs.config_path }}").resolve()
+          target_environment = "${{ inputs.target_environment }}"
+
+          try:
+              with config_path.open("r", encoding="utf-8") as f:
+                  config = yaml.safe_load(f)
+          except yaml.YAMLError as exc:
+              print(f"Failed to parse config YAML '{config_path}': {exc}", file=sys.stderr)
+              sys.exit(1)
+          except OSError as exc:
+              print(f"Failed to read config '{config_path}': {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          try:
+              deploy = config["deploy"]
+              env_cfg = config["environments"][target_environment]
+              compose_file = deploy["compose"]["file"]
+              deploy_target_name = env_cfg["deploy"]["target"]["name"]
+          except KeyError as exc:
+              print(f"Config missing required deploy key: {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          output_path = os.environ["GITHUB_OUTPUT"]
+          with open(output_path, "a", encoding="utf-8") as out:
+              out.write(f"compose_file={compose_file}\n")
+              out.write(f"deploy_target_name={deploy_target_name}\n")
+          PY
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.deploy_meta.outputs.image_registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull exact image by digest
+        shell: bash
+        run: |
+          docker pull "${{ steps.deploy_meta.outputs.image_registry }}/${{ steps.deploy_meta.outputs.image_repository }}@${{ steps.deploy_meta.outputs.image_digest }}"
+
+      - name: Prepare deployment image reference
+        id: deploy_image
+        shell: bash
+        run: |
+          deploy_image="${{ steps.deploy_meta.outputs.image_registry }}/${{ steps.deploy_meta.outputs.image_repository }}@${{ steps.deploy_meta.outputs.image_digest }}"
+          echo "deploy_image=${deploy_image}" >> "$GITHUB_OUTPUT"
+
+      - name: Guard against build-based deploy compose
+        shell: bash
+        run: |
+          if grep -Eq '^[[:space:]]*build:' "${{ steps.deploy_config.outputs.compose_file }}"; then
+            echo "Deploy compose file must not contain build: entries. Deploy must use image references only." >&2
+            exit 1
+          fi
+
+      - name: Validate compose config
+        env:
+          DEPLOY_IMAGE: ${{ steps.deploy_image.outputs.deploy_image }}
+        shell: bash
+        run: |
+          docker compose -f "${{ steps.deploy_config.outputs.compose_file }}" config > /dev/null
+
+      - name: Deploy with Docker Compose
+        env:
+          DEPLOY_IMAGE: ${{ steps.deploy_image.outputs.deploy_image }}
+        shell: bash
+        run: |
+          docker compose -f "${{ steps.deploy_config.outputs.compose_file }}" up -d
+
+      - name: Deploy summary
+        shell: bash
+        run: |
+          {
+            echo "## Deploy Summary"
+            echo ""
+            echo "- Environment: ${{ inputs.target_environment }}"
+            echo "- Target: ${{ steps.deploy_config.outputs.deploy_target_name }}"
+            echo "- Release ID: ${{ steps.deploy_meta.outputs.release_id }}"
+            echo "- Release Version: ${{ steps.deploy_meta.outputs.release_version }}"
+            echo "- Image: ${{ steps.deploy_image.outputs.deploy_image }}"
+            echo "- Image Digest: ${{ steps.deploy_meta.outputs.image_digest }}"
+            echo "- Compose File: ${{ steps.deploy_config.outputs.compose_file }}"
+            echo "- Manifest Path: ${{ steps.resolve_manifest.outputs.manifest_path }}"
+          } >> "$GITHUB_STEP_SUMMARY"

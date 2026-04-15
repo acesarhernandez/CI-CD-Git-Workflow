@@ -1,0 +1,305 @@
+name: Reusable Build Publish
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        description: Path to the app CI/CD config file
+        required: false
+        type: string
+        default: cicd.app.yaml
+
+      schema_path:
+        description: Path to the CI/CD app schema file
+        required: false
+        type: string
+        default: cicd.app.schema.json
+
+      target_environment:
+        description: Target environment for validation context
+        required: true
+        type: string
+
+      image_registry:
+        description: Container registry hostname
+        required: false
+        type: string
+        default: ghcr.io
+
+      output_manifest_path:
+        description: Output path for generated release manifest
+        required: false
+        type: string
+        default: release-manifest.json
+
+    outputs:
+      image_repository:
+        description: Full image repository path
+        value: ${{ jobs.build_publish.outputs.image_repository }}
+
+      image_tag:
+        description: Image tag used for this build
+        value: ${{ jobs.build_publish.outputs.image_tag }}
+
+      image_digest:
+        description: Image digest after push
+        value: ${{ jobs.build_publish.outputs.image_digest }}
+
+      release_id:
+        description: Generated release ID
+        value: ${{ jobs.build_publish.outputs.release_id }}
+
+      release_version:
+        description: Generated release version
+        value: ${{ jobs.build_publish.outputs.release_version }}
+
+      manifest_path:
+        description: Path to generated manifest
+        value: ${{ jobs.build_publish.outputs.manifest_path }}
+
+      manifest_sha256:
+        description: SHA256 of generated manifest
+        value: ${{ jobs.build_publish.outputs.manifest_sha256 }}
+
+      release_manifest_artifact_name:
+        description: Artifact name containing the generated release manifest
+        value: ${{ jobs.build_publish.outputs.release_manifest_artifact_name }}
+
+jobs:
+  validate:
+    uses: ./.github/workflows/reusable-validate.yaml
+    with:
+      config_path: ${{ inputs.config_path }}
+      schema_path: ${{ inputs.schema_path }}
+      target_environment: ${{ inputs.target_environment }}
+
+  build_publish:
+    name: Build and Publish
+    runs-on: ubuntu-latest
+    needs: validate
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_repository: ${{ steps.meta.outputs.image_repository }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      image_digest: ${{ steps.build_push.outputs.digest }}
+      release_id: ${{ steps.release_meta.outputs.release_id }}
+      release_version: ${{ steps.release_meta.outputs.release_version }}
+      manifest_path: ${{ steps.manifest.outputs.manifest_path }}
+      manifest_sha256: ${{ steps.manifest.outputs.manifest_sha256 }}
+      release_manifest_artifact_name: ${{ steps.manifest_artifact.outputs.release_manifest_artifact_name }}
+
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Resolve CI/CD workflow source
+        id: cicd_source
+        shell: bash
+        run: |
+          workflow_ref='${{ github.workflow_ref }}'
+          cicd_repo="${workflow_ref%%/.github/workflows/*}"
+          cicd_ref="${workflow_ref##*@}"
+
+          if [[ -z "$cicd_repo" || -z "$cicd_ref" ]]; then
+            echo "Failed to resolve CI/CD workflow source from github.workflow_ref=$workflow_ref" >&2
+            exit 1
+          fi
+
+          echo "cicd_repo=${cicd_repo}" >> "$GITHUB_OUTPUT"
+          echo "cicd_ref=${cicd_ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout CI/CD system repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.cicd_source.outputs.cicd_repo }}
+          ref: ${{ steps.cicd_source.outputs.cicd_ref }}
+          path: .cicd-system
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install config parsing dependency
+        shell: bash
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyyaml
+
+      - name: Capture build start time
+        id: build_start
+        shell: bash
+        run: |
+          echo "started_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$GITHUB_OUTPUT"
+
+      - name: Load build config values
+        id: config
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import yaml
+
+          config_path = "${{ inputs.config_path }}"
+          with open(config_path, "r", encoding="utf-8") as f:
+              config = yaml.safe_load(f)
+
+          app_name = config["app"]["name"]
+          service = config["app"]["service"]
+          profile = config["profile"]["id"]
+          role = config["app"].get("role", "")
+          build_context = config["build"]["context"]
+          dockerfile = config["build"].get("dockerfile", "Dockerfile")
+          image_repository = config["build"]["image"]["repository"]
+          verification_contract = config["verify"]
+
+          output_path = os.environ["GITHUB_OUTPUT"]
+          with open(output_path, "a", encoding="utf-8") as out:
+              out.write(f"app_name={app_name}\n")
+              out.write(f"service={service}\n")
+              out.write(f"profile={profile}\n")
+              out.write(f"role={role}\n")
+              out.write(f"build_context={build_context}\n")
+              out.write(f"dockerfile={dockerfile}\n")
+              out.write(f"image_repository={image_repository}\n")
+              out.write("verification_contract_json<<EOF\n")
+              out.write(json.dumps(verification_contract))
+              out.write("\nEOF\n")
+          PY
+
+      - name: Compute config hash
+        id: config_hash
+        shell: bash
+        run: |
+          sha256=$(sha256sum "${{ inputs.config_path }}" | awk '{print $1}')
+          echo "source_config_hash=sha256:${sha256}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          created_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          short_sha=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          release_version="sha-${short_sha}"
+          safe_created_at=$(echo "${created_at}" | tr ':' '-')
+          release_id="${{ steps.config.outputs.app_name }}-${safe_created_at}-${short_sha}"
+
+          echo "created_at=${created_at}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
+          echo "release_id=${release_id}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute image metadata
+        id: meta
+        shell: bash
+        run: |
+          image_repository=$(echo "${{ steps.config.outputs.image_repository }}" | tr '[:upper:]' '[:lower:]')
+          image_tag="${GITHUB_SHA}"
+
+          echo "image_repository=${image_repository}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.image_registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: build_push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.config.outputs.build_context }}
+          file: ${{ steps.config.outputs.dockerfile }}
+          push: true
+          tags: ${{ inputs.image_registry }}/${{ steps.meta.outputs.image_repository }}:${{ steps.meta.outputs.image_tag }}
+
+      - name: Capture build finish time
+        id: build_finish
+        shell: bash
+        run: |
+          echo "finished_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release manifest
+        id: manifest
+        shell: bash
+        env:
+          APP_NAME: ${{ steps.config.outputs.app_name }}
+          SERVICE: ${{ steps.config.outputs.service }}
+          PROFILE: ${{ steps.config.outputs.profile }}
+          ROLE: ${{ steps.config.outputs.role }}
+
+          RELEASE_VERSION: ${{ steps.release_meta.outputs.release_version }}
+          RELEASE_ID: ${{ steps.release_meta.outputs.release_id }}
+          CREATED_AT: ${{ steps.release_meta.outputs.created_at }}
+          SOURCE_REF: ${{ github.ref }}
+          COMMIT_SHA: ${{ github.sha }}
+          SHORT_SHA: ${{ steps.release_meta.outputs.short_sha }}
+          BRANCH: ${{ github.ref_name }}
+          TAG: ""
+
+          DEPLOYMENT_UNIT_TYPE: image
+          IMAGE_REGISTRY: ${{ inputs.image_registry }}
+          IMAGE_REPOSITORY: ${{ steps.meta.outputs.image_repository }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+          IMAGE_DIGEST: ${{ steps.build_push.outputs.digest }}
+
+          RUNNER_TYPE: github-hosted
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          STARTED_AT: ${{ steps.build_start.outputs.started_at }}
+          FINISHED_AT: ${{ steps.build_finish.outputs.finished_at }}
+          SOURCE_CONFIG_HASH: ${{ steps.config_hash.outputs.source_config_hash }}
+          BUILD_INPUTS_HASH: ""
+
+          VERIFICATION_CONTRACT_JSON: ${{ steps.config.outputs.verification_contract_json }}
+
+          SUPPORTED_ENVIRONMENTS_JSON: '["development","staging","production"]'
+          DEPLOY_MODE: image
+          SOURCE_DEPLOY_ELIGIBLE: "false"
+
+          RECOVERY_STRATEGY: manifest-redeploy
+          RETAINED: "true"
+          PREVIOUS_RELEASE_ID: ""
+          ROLLBACK_COMMIT_SHA: ""
+
+          DEPLOYMENT_UNIT_DIGEST_VERIFIED: "true"
+          OUTPUT_PATH: ${{ inputs.output_manifest_path }}
+        run: |
+          python3 '.cicd-system/generate_release_manifest.py'
+
+      - name: Set release manifest artifact name
+        id: manifest_artifact
+        shell: bash
+        run: |
+          echo "release_manifest_artifact_name=release-manifest-${{ steps.release_meta.outputs.release_id }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.manifest_artifact.outputs.release_manifest_artifact_name }}
+          path: ${{ steps.manifest.outputs.manifest_path }}
+
+      - name: Build publish summary
+        shell: bash
+        run: |
+          {
+            echo "## Build Publish Summary"
+            echo ""
+            echo "- App: ${{ steps.config.outputs.app_name }}"
+            echo "- Image: ${{ inputs.image_registry }}/${{ steps.meta.outputs.image_repository }}:${{ steps.meta.outputs.image_tag }}"
+            echo "- Digest: ${{ steps.build_push.outputs.digest }}"
+            echo "- Release ID: ${{ steps.release_meta.outputs.release_id }}"
+            echo "- Release Version: ${{ steps.release_meta.outputs.release_version }}"
+            echo "- Manifest: ${{ steps.manifest.outputs.manifest_path }}"
+            echo "- Manifest Artifact: ${{ steps.manifest_artifact.outputs.release_manifest_artifact_name }}"
+          } >> "$GITHUB_STEP_SUMMARY"
