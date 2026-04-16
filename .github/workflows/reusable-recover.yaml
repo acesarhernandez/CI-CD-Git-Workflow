@@ -42,7 +42,7 @@ on:
 jobs:
   precheck:
     name: Recovery Precheck
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     outputs:
       recovered_release_id: ${{ steps.manifest_meta.outputs.release_id }}
